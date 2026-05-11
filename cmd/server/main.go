@@ -1,5 +1,6 @@
 // Точка входа в приложение MFAuth — сервис авторизации.
-// Отвечает за инициализацию конфигурации, сборку HTTP-сервера и graceful shutdown.
+// Отвечает за инициализацию конфигурации, подключение к БД,
+// запуск миграций, сборку HTTP-сервера и graceful shutdown.
 package main
 
 import (
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mixfon/mfauth/internal/config"
+	"github.com/mixfon/mfauth/internal/database"
 )
 
 func main() {
@@ -22,6 +24,23 @@ func main() {
 	// Загружаем конфигурацию из переменных окружения.
 	// В продакшене переменные задаются через .env файл или секреты Docker/systemd.
 	cfg := config.Load()
+
+	// Подключаемся к PostgreSQL.
+	db, err := database.New(cfg.Database.DSN)
+	if err != nil {
+		log.Error("failed to connect to database", "err", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+	log.Info("database connected")
+
+	// Применяем SQL-миграции при каждом старте сервера.
+	// Уже применённые миграции пропускаются — операция идемпотентна.
+	if err = database.Migrate(db); err != nil {
+		log.Error("failed to run migrations", "err", err)
+		os.Exit(1)
+	}
+	log.Info("migrations applied")
 
 	// ServeMux — стандартный роутер Go. Начиная с Go 1.22 поддерживает
 	// указание HTTP-метода прямо в паттерне: "POST /auth/login"

@@ -14,6 +14,10 @@ import (
 
 	"github.com/mixfon/mfauth/internal/config"
 	"github.com/mixfon/mfauth/internal/database"
+	"github.com/mixfon/mfauth/internal/handler"
+	"github.com/mixfon/mfauth/internal/middleware"
+	"github.com/mixfon/mfauth/internal/repository"
+	"github.com/mixfon/mfauth/internal/service"
 )
 
 func main() {
@@ -42,11 +46,29 @@ func main() {
 	}
 	log.Info("migrations applied")
 
+	// Dependency injection вручную — создаём слои снизу вверх:
+	// БД → репозитории → сервис → хендлеры.
+	// Никакого DI-фреймворка: зависимости явные и легко прослеживаются.
+	userRepo := repository.NewUserRepository(db)
+	tokenRepo := repository.NewTokenRepository(db)
+	authService := service.NewAuthService(userRepo, tokenRepo, cfg, log)
+	authHandler := handler.NewAuthHandler(authService, log)
+
 	// ServeMux — стандартный роутер Go. Начиная с Go 1.22 поддерживает
 	// указание HTTP-метода прямо в паттерне: "POST /auth/login"
 	mux := http.NewServeMux()
 
-	// TODO: регистрация хендлеров (следующие шаги)
+	// Публичные маршруты — не требуют токена.
+	mux.HandleFunc("POST /auth/register", authHandler.Register)
+	mux.HandleFunc("POST /auth/login", authHandler.Login)
+	mux.HandleFunc("POST /auth/refresh", authHandler.Refresh)
+	mux.HandleFunc("POST /auth/logout", authHandler.Logout)
+
+	// Защищённый маршрут — оборачиваем в middleware.Auth.
+	// middleware.Auth проверяет JWT и кладёт userID в контекст.
+	// Если токен невалиден — middleware отвечает 401, до хендлера запрос не доходит.
+	authMiddleware := middleware.Auth(cfg.JWT.AccessSecret)
+	mux.Handle("GET /auth/me", authMiddleware(http.HandlerFunc(authHandler.Me)))
 
 	// Эндпоинт проверки работоспособности сервиса.
 	// Используется балансировщиком нагрузки и системами мониторинга (uptime-проверки).

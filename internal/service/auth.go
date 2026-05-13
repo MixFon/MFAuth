@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -62,8 +63,9 @@ func (s *authService) Register(ctx context.Context, input domain.RegisterInput) 
 	}
 
 	// Проверяем что email ещё не занят.
+	// ErrNotFound означает что пользователь не существует — это нормально при регистрации.
 	existing, err := s.userRepo.FindByEmail(ctx, input.Email)
-	if err != nil {
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
 		return err
 	}
 	if existing != nil {
@@ -94,10 +96,11 @@ func (s *authService) Register(ctx context.Context, input domain.RegisterInput) 
 // Порядок: поиск пользователя → проверка пароля → генерация токенов → сохранение refresh-токена.
 func (s *authService) Login(ctx context.Context, input domain.LoginInput) (domain.TokenPair, error) {
 	user, err := s.userRepo.FindByEmail(ctx, input.Email)
-	if err != nil {
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
 		return domain.TokenPair{}, err
 	}
 	// Не уточняем клиенту что именно неверно: email или пароль.
+	// ErrNotFound (user == nil) и неверный пароль — одинаковый ответ 401.
 	if user == nil || !hash.CheckPassword(input.Password, user.PasswordHash) {
 		return domain.TokenPair{}, ErrInvalidCredentials
 	}
@@ -115,7 +118,7 @@ func (s *authService) Login(ctx context.Context, input domain.LoginInput) (domai
 // Старый токен немедленно отзывается — это и есть token rotation.
 func (s *authService) Refresh(ctx context.Context, input domain.RefreshInput) (domain.TokenPair, error) {
 	stored, err := s.tokenRepo.FindByToken(ctx, input.RefreshToken)
-	if err != nil {
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
 		return domain.TokenPair{}, err
 	}
 	if stored == nil {
@@ -152,7 +155,7 @@ func (s *authService) Refresh(ctx context.Context, input domain.RefreshInput) (d
 // Access-токен не трогаем — он короткоживущий и истечёт сам.
 func (s *authService) Logout(ctx context.Context, refreshToken string) error {
 	stored, err := s.tokenRepo.FindByToken(ctx, refreshToken)
-	if err != nil {
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
 		return err
 	}
 	if stored == nil {

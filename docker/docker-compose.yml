@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mfauth
+    volumes:
+      # Именованный volume — данные PostgreSQL сохраняются между перезапусками контейнера.
+      # Без этого все данные теряются при docker compose down.
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready проверяет что PostgreSQL принимает соединения.
+      # mfauth не стартует пока этот check не пройдёт — см. depends_on ниже.
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s   # проверять каждые 5 секунд
+      timeout: 5s    # считать неудачей если нет ответа за 5 секунд
+      retries: 5     # после 5 неудач контейнер помечается unhealthy
+
+  mfauth:
+    build:
+      context: ..              # контекст сборки — корень проекта (папка выше docker/)
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8080:8080"            # хост:контейнер
+    env_file:
+      - ../.env                # загружаем переменные из .env в корне проекта
+    environment:
+      # Переопределяем DATABASE_DSN из .env — меняем хост с localhost на postgres.
+      # Внутри Docker-сети сервисы обращаются друг к другу по имени сервиса,
+      # а не по localhost. Это значение имеет приоритет над env_file.
+      DATABASE_DSN: postgres://postgres:postgres@postgres:5432/mfauth?sslmode=disable
+    depends_on:
+      postgres:
+        # service_healthy — ждём именно успешного health-check, а не просто запуска контейнера.
+        # Без этого mfauth стартует раньше чем PostgreSQL готова принимать соединения.
+        condition: service_healthy
+
+# Объявляем именованный volume на уровне compose-файла.
+# Docker создаёт его автоматически при первом запуске.
+volumes:
+  postgres_data:

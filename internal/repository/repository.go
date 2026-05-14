@@ -21,6 +21,10 @@ type UserRepository interface {
 	// FindByID возвращает пользователя по идентификатору.
 	// Используется в защищённых эндпоинтах (например, GET /auth/me).
 	FindByID(ctx context.Context, id int64) (*domain.User, error)
+
+	// UpdatePassword сохраняет новый хэш пароля для указанного пользователя.
+	// Используется при сбросе пароля и при смене пароля.
+	UpdatePassword(ctx context.Context, userID int64, passwordHash string) error
 }
 
 // TokenRepository описывает операции с refresh-токенами в хранилище.
@@ -42,5 +46,21 @@ type TokenRepository interface {
 
 	// DeleteExpired удаляет просроченные токены из БД.
 	// Рекомендуется вызывать периодически, чтобы таблица не разрасталась.
+	DeleteExpired(ctx context.Context) error
+}
+
+// ResetTokenRepository описывает операции с токенами сброса пароля.
+type ResetTokenRepository interface {
+	// Save сохраняет новый токен сброса пароля в БД.
+	Save(ctx context.Context, token *domain.PasswordResetToken) error
+
+	// FindByToken ищет токен по его строковому значению.
+	// Возвращает ErrNotFound если токен не существует.
+	FindByToken(ctx context.Context, token string) (*domain.PasswordResetToken, error)
+
+	// MarkUsed помечает токен как использованный — повторное использование невозможно.
+	MarkUsed(ctx context.Context, token string) error
+
+	// DeleteExpired удаляет просроченные токены.
 	DeleteExpired(ctx context.Context) error
 }

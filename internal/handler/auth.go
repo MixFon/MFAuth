@@ -9,9 +9,9 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/mixfon/mfauth/internal/domain"
 	"github.com/mixfon/mfauth/internal/middleware"
 	"github.com/mixfon/mfauth/internal/service"
-	"github.com/mixfon/mfauth/internal/domain"
 	"github.com/mixfon/mfauth/pkg/validate"
 )
 
@@ -127,6 +127,53 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// RequestPasswordReset обрабатывает POST /auth/password/reset/request.
+// Всегда возвращает 200 — даже если email не зарегистрирован, чтобы не раскрывать список аккаунтов.
+func (h *AuthHandler) RequestPasswordReset(w http.ResponseWriter, r *http.Request) {
+	var input domain.PasswordResetRequestInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body"))
+		return
+	}
+
+	if err := h.service.RequestPasswordReset(r.Context(), input.Email); err != nil {
+		h.log.Error("request password reset failed", "err", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse("internal server error"))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "if this email is registered, a reset link has been sent"})
+}
+
+// ConfirmPasswordReset обрабатывает POST /auth/password/reset/confirm.
+// Проверяет токен и устанавливает новый пароль. Отзывает все активные сессии.
+func (h *AuthHandler) ConfirmPasswordReset(w http.ResponseWriter, r *http.Request) {
+	var input domain.PasswordResetConfirmInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body"))
+		return
+	}
+
+	err := h.service.ConfirmPasswordReset(r.Context(), input)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrResetTokenNotFound),
+			errors.Is(err, service.ErrResetTokenExpired),
+			errors.Is(err, service.ErrResetTokenUsed):
+			writeJSON(w, http.StatusBadRequest, errorResponse(err.Error()))
+		case errors.Is(err, validate.ErrPasswordTooShort),
+			errors.Is(err, validate.ErrPasswordTooLong):
+			writeJSON(w, http.StatusBadRequest, errorResponse(err.Error()))
+		default:
+			h.log.Error("confirm password reset failed", "err", err)
+			writeJSON(w, http.StatusInternalServerError, errorResponse("internal server error"))
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "password changed successfully"})
 }
 
 // Me обрабатывает GET /auth/me.

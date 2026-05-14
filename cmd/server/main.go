@@ -18,6 +18,7 @@ import (
 	"github.com/mixfon/mfauth/internal/middleware"
 	"github.com/mixfon/mfauth/internal/repository"
 	"github.com/mixfon/mfauth/internal/service"
+	"github.com/mixfon/mfauth/pkg/email"
 )
 
 func main() {
@@ -51,7 +52,16 @@ func main() {
 	// Никакого DI-фреймворка: зависимости явные и легко прослеживаются.
 	userRepo := repository.NewUserRepository(db)
 	tokenRepo := repository.NewTokenRepository(db)
-	authService := service.NewAuthService(userRepo, tokenRepo, cfg, log)
+	resetTokenRepo := repository.NewResetTokenRepository(db)
+	mailer := email.NewSender(email.Config{
+		Host:   cfg.Email.SMTPHost,
+		Port:   cfg.Email.SMTPPort,
+		User:   cfg.Email.User,
+		Pass:   cfg.Email.Pass,
+		From:   cfg.Email.From,
+		AppURL: cfg.Email.AppURL,
+	})
+	authService := service.NewAuthService(userRepo, tokenRepo, resetTokenRepo, mailer, cfg, log)
 	authHandler := handler.NewAuthHandler(authService, log)
 
 	// ServeMux — стандартный роутер Go. Начиная с Go 1.22 поддерживает
@@ -63,6 +73,8 @@ func main() {
 	mux.HandleFunc("POST /auth/login", authHandler.Login)
 	mux.HandleFunc("POST /auth/refresh", authHandler.Refresh)
 	mux.HandleFunc("POST /auth/logout", authHandler.Logout)
+	mux.HandleFunc("POST /auth/password/reset/request", authHandler.RequestPasswordReset)
+	mux.HandleFunc("POST /auth/password/reset/confirm", authHandler.ConfirmPasswordReset)
 
 	// Защищённый маршрут — оборачиваем в middleware.Auth.
 	// middleware.Auth проверяет JWT и кладёт userID в контекст.

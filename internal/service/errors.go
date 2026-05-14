@@ -26,4 +26,16 @@ var (
 	// ErrTokenRevoked — refresh-токен был уже использован или отозван при логауте.
 	// Хендлер должен вернуть 401 Unauthorized.
 	ErrTokenRevoked = errors.New("refresh token revoked")
+
+	// ErrResetTokenNotFound — токен сброса пароля не найден в БД.
+	// Хендлер должен вернуть 400 Bad Request.
+	ErrResetTokenNotFound = errors.New("reset token not found")
+
+	// ErrResetTokenExpired — токен сброса пароля просрочен (TTL 15 минут).
+	// Хендлер должен вернуть 400 Bad Request.
+	ErrResetTokenExpired = errors.New("reset token expired")
+
+	// ErrResetTokenUsed — токен сброса пароля уже был использован.
+	// Каждый токен одноразовый. Хендлер должен вернуть 400 Bad Request.
+	ErrResetTokenUsed = errors.New("reset token already used")
 )

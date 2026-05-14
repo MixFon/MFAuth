@@ -70,6 +70,16 @@ func (r *userPostgres) FindByEmail(ctx context.Context, email string) (*domain.U
 	return &u, nil
 }
 
+// UpdatePassword обновляет хэш пароля пользователя.
+// Используется при сбросе пароля — принимает уже готовый bcrypt-хэш, не открытый пароль.
+func (r *userPostgres) UpdatePassword(ctx context.Context, userID int64, passwordHash string) error {
+	query := `UPDATE users SET password_hash = $1 WHERE id = $2`
+	if _, err := r.db.ExecContext(ctx, query, passwordHash, userID); err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	return nil
+}
+
 // FindByID ищет пользователя по первичному ключу.
 // Возвращает ErrNotFound если пользователь не существует.
 func (r *userPostgres) FindByID(ctx context.Context, id int64) (*domain.User, error) {

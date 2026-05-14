@@ -11,11 +11,12 @@ import (
 )
 
 // Config — корневая структура конфигурации приложения.
-// Объединяет настройки всех подсистем: сервера, базы данных и JWT.
+// Объединяет настройки всех подсистем: сервера, базы данных, JWT и email.
 type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
 	JWT      JWTConfig
+	Email    EmailConfig
 }
 
 // ServerConfig содержит параметры HTTP-сервера.
@@ -44,6 +45,18 @@ type JWTConfig struct {
 	RefreshTokenTTL time.Duration // длинное время жизни (по умолчанию 30 дней)
 }
 
+// EmailConfig содержит параметры SMTP для отправки писем.
+// AppURL — базовый URL приложения, вставляется в письмо как ссылка сброса пароля.
+// Для iOS-приложений это может быть deep link: myapp://reset-password
+type EmailConfig struct {
+	SMTPHost string
+	SMTPPort string // 587 (STARTTLS) или 465 (SSL/TLS)
+	User     string
+	Pass     string
+	From     string
+	AppURL   string
+}
+
 // Load читает переменные окружения и возвращает заполненный Config.
 // Для каждого параметра задано значение по умолчанию — это упрощает
 // локальную разработку без обязательного .env файла.
@@ -62,6 +75,14 @@ func Load() *Config {
 			RefreshSecret:   getEnv("JWT_REFRESH_SECRET", "change_me_refresh_secret"),
 			AccessTokenTTL:  getDurationEnv("JWT_ACCESS_TTL_MIN", 15) * time.Minute,
 			RefreshTokenTTL: getDurationEnv("JWT_REFRESH_TTL_DAY", 30) * 24 * time.Hour,
+		},
+		Email: EmailConfig{
+			SMTPHost: getEnv("SMTP_HOST", ""),
+			SMTPPort: getEnv("SMTP_PORT", "587"),
+			User:     getEnv("SMTP_USER", ""),
+			Pass:     getEnv("SMTP_PASS", ""),
+			From:     getEnv("SMTP_FROM", ""),
+			AppURL:   getEnv("APP_URL", "https://example.com"),
 		},
 	}
 }

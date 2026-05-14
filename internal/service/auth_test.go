@@ -26,7 +26,19 @@ var testPasswordHash = func() string {
 }()
 
 // newTestService создаёт AuthService с тестовым конфигом и тихим логгером.
+// Для resetTokenRepo и mailer используются пустые заглушки — подходит для тестов Register/Login/Refresh/Logout.
 func newTestService(userRepo repository.UserRepository, tokenRepo repository.TokenRepository) service.AuthService {
+	return newTestServiceFull(userRepo, tokenRepo, &mockResetTokenRepo{}, &mockEmailSender{})
+}
+
+// newTestServiceFull создаёт AuthService со всеми зависимостями явно.
+// Используется в тестах RequestPasswordReset и ConfirmPasswordReset.
+func newTestServiceFull(
+	userRepo repository.UserRepository,
+	tokenRepo repository.TokenRepository,
+	resetRepo repository.ResetTokenRepository,
+	mailer service.EmailSender,
+) service.AuthService {
 	cfg := &config.Config{
 		JWT: config.JWTConfig{
 			AccessSecret:    "test-access-secret",
@@ -36,7 +48,7 @@ func newTestService(userRepo repository.UserRepository, tokenRepo repository.Tok
 		},
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return service.NewAuthService(userRepo, tokenRepo, cfg, log)
+	return service.NewAuthService(userRepo, tokenRepo, resetRepo, mailer, cfg, log)
 }
 
 // =============================================================================
@@ -46,9 +58,10 @@ func newTestService(userRepo repository.UserRepository, tokenRepo repository.Tok
 // =============================================================================
 
 type mockUserRepo struct {
-	createFn      func(ctx context.Context, user *domain.User) error
-	findByEmailFn func(ctx context.Context, email string) (*domain.User, error)
-	findByIDFn    func(ctx context.Context, id int64) (*domain.User, error)
+	createFn         func(ctx context.Context, user *domain.User) error
+	findByEmailFn    func(ctx context.Context, email string) (*domain.User, error)
+	findByIDFn       func(ctx context.Context, id int64) (*domain.User, error)
+	updatePasswordFn func(ctx context.Context, userID int64, passwordHash string) error
 }
 
 func (m *mockUserRepo) Create(ctx context.Context, user *domain.User) error {
@@ -70,6 +83,61 @@ func (m *mockUserRepo) FindByID(ctx context.Context, id int64) (*domain.User, er
 		return m.findByIDFn(ctx, id)
 	}
 	return nil, repository.ErrNotFound
+}
+
+func (m *mockUserRepo) UpdatePassword(ctx context.Context, userID int64, passwordHash string) error {
+	if m.updatePasswordFn != nil {
+		return m.updatePasswordFn(ctx, userID, passwordHash)
+	}
+	return nil
+}
+
+// mockResetTokenRepo — заглушка ResetTokenRepository для тестов.
+type mockResetTokenRepo struct {
+	saveFn         func(ctx context.Context, token *domain.PasswordResetToken) error
+	findByTokenFn  func(ctx context.Context, token string) (*domain.PasswordResetToken, error)
+	markUsedFn     func(ctx context.Context, token string) error
+	deleteExpiredFn func(ctx context.Context) error
+}
+
+func (m *mockResetTokenRepo) Save(ctx context.Context, token *domain.PasswordResetToken) error {
+	if m.saveFn != nil {
+		return m.saveFn(ctx, token)
+	}
+	return nil
+}
+
+func (m *mockResetTokenRepo) FindByToken(ctx context.Context, token string) (*domain.PasswordResetToken, error) {
+	if m.findByTokenFn != nil {
+		return m.findByTokenFn(ctx, token)
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (m *mockResetTokenRepo) MarkUsed(ctx context.Context, token string) error {
+	if m.markUsedFn != nil {
+		return m.markUsedFn(ctx, token)
+	}
+	return nil
+}
+
+func (m *mockResetTokenRepo) DeleteExpired(ctx context.Context) error {
+	if m.deleteExpiredFn != nil {
+		return m.deleteExpiredFn(ctx)
+	}
+	return nil
+}
+
+// mockEmailSender — заглушка EmailSender.
+type mockEmailSender struct {
+	sendPasswordResetFn func(to, token string) error
+}
+
+func (m *mockEmailSender) SendPasswordReset(to, token string) error {
+	if m.sendPasswordResetFn != nil {
+		return m.sendPasswordResetFn(to, token)
+	}
+	return nil
 }
 
 type mockTokenRepo struct {
@@ -318,5 +386,140 @@ func TestLogout_TokenNotFound(t *testing.T) {
 	err := svc.Logout(context.Background(), "unknown-token")
 	if !errors.Is(err, service.ErrTokenNotFound) {
 		t.Errorf("err = %v, want ErrTokenNotFound", err)
+	}
+}
+
+// =============================================================================
+// RequestPasswordReset
+// =============================================================================
+
+func TestRequestPasswordReset_Success(t *testing.T) {
+	userRepo := &mockUserRepo{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return &domain.User{ID: 1, Email: "test@example.com"}, nil
+		},
+	}
+	var sentTo, sentToken string
+	mailer := &mockEmailSender{
+		sendPasswordResetFn: func(to, token string) error {
+			sentTo, sentToken = to, token
+			return nil
+		},
+	}
+	svc := newTestServiceFull(userRepo, &mockTokenRepo{}, &mockResetTokenRepo{}, mailer)
+
+	err := svc.RequestPasswordReset(context.Background(), "test@example.com")
+	if err != nil {
+		t.Fatalf("RequestPasswordReset: %v", err)
+	}
+	if sentTo != "test@example.com" {
+		t.Errorf("email sent to %q, want %q", sentTo, "test@example.com")
+	}
+	if len(sentToken) != 64 {
+		t.Errorf("token length = %d, want 64 (hex of 32 bytes)", len(sentToken))
+	}
+}
+
+// Если email не зарегистрирован — сервис молча возвращает nil, не раскрывая факт регистрации.
+func TestRequestPasswordReset_UnknownEmail(t *testing.T) {
+	svc := newTestServiceFull(&mockUserRepo{}, &mockTokenRepo{}, &mockResetTokenRepo{}, &mockEmailSender{})
+
+	err := svc.RequestPasswordReset(context.Background(), "unknown@example.com")
+	if err != nil {
+		t.Errorf("expected nil for unknown email, got: %v", err)
+	}
+}
+
+// =============================================================================
+// ConfirmPasswordReset
+// =============================================================================
+
+func TestConfirmPasswordReset_Success(t *testing.T) {
+	resetRepo := &mockResetTokenRepo{
+		findByTokenFn: func(_ context.Context, _ string) (*domain.PasswordResetToken, error) {
+			return &domain.PasswordResetToken{
+				UserID:    1,
+				Token:     "valid-reset-token",
+				ExpiresAt: time.Now().Add(15 * time.Minute),
+				Used:      false,
+			}, nil
+		},
+	}
+	svc := newTestServiceFull(&mockUserRepo{}, &mockTokenRepo{}, resetRepo, &mockEmailSender{})
+
+	err := svc.ConfirmPasswordReset(context.Background(), domain.PasswordResetConfirmInput{
+		Token:       "valid-reset-token",
+		NewPassword: "newpassword123",
+	})
+	if err != nil {
+		t.Fatalf("ConfirmPasswordReset: %v", err)
+	}
+}
+
+func TestConfirmPasswordReset_TokenNotFound(t *testing.T) {
+	svc := newTestServiceFull(&mockUserRepo{}, &mockTokenRepo{}, &mockResetTokenRepo{}, &mockEmailSender{})
+
+	err := svc.ConfirmPasswordReset(context.Background(), domain.PasswordResetConfirmInput{
+		Token: "unknown-token", NewPassword: "newpassword123",
+	})
+	if !errors.Is(err, service.ErrResetTokenNotFound) {
+		t.Errorf("err = %v, want ErrResetTokenNotFound", err)
+	}
+}
+
+func TestConfirmPasswordReset_TokenExpired(t *testing.T) {
+	resetRepo := &mockResetTokenRepo{
+		findByTokenFn: func(_ context.Context, _ string) (*domain.PasswordResetToken, error) {
+			return &domain.PasswordResetToken{
+				ExpiresAt: time.Now().Add(-time.Minute),
+				Used:      false,
+			}, nil
+		},
+	}
+	svc := newTestServiceFull(&mockUserRepo{}, &mockTokenRepo{}, resetRepo, &mockEmailSender{})
+
+	err := svc.ConfirmPasswordReset(context.Background(), domain.PasswordResetConfirmInput{
+		Token: "expired-token", NewPassword: "newpassword123",
+	})
+	if !errors.Is(err, service.ErrResetTokenExpired) {
+		t.Errorf("err = %v, want ErrResetTokenExpired", err)
+	}
+}
+
+func TestConfirmPasswordReset_TokenUsed(t *testing.T) {
+	resetRepo := &mockResetTokenRepo{
+		findByTokenFn: func(_ context.Context, _ string) (*domain.PasswordResetToken, error) {
+			return &domain.PasswordResetToken{
+				ExpiresAt: time.Now().Add(15 * time.Minute),
+				Used:      true,
+			}, nil
+		},
+	}
+	svc := newTestServiceFull(&mockUserRepo{}, &mockTokenRepo{}, resetRepo, &mockEmailSender{})
+
+	err := svc.ConfirmPasswordReset(context.Background(), domain.PasswordResetConfirmInput{
+		Token: "used-token", NewPassword: "newpassword123",
+	})
+	if !errors.Is(err, service.ErrResetTokenUsed) {
+		t.Errorf("err = %v, want ErrResetTokenUsed", err)
+	}
+}
+
+func TestConfirmPasswordReset_WeakPassword(t *testing.T) {
+	resetRepo := &mockResetTokenRepo{
+		findByTokenFn: func(_ context.Context, _ string) (*domain.PasswordResetToken, error) {
+			return &domain.PasswordResetToken{
+				ExpiresAt: time.Now().Add(15 * time.Minute),
+				Used:      false,
+			}, nil
+		},
+	}
+	svc := newTestServiceFull(&mockUserRepo{}, &mockTokenRepo{}, resetRepo, &mockEmailSender{})
+
+	err := svc.ConfirmPasswordReset(context.Background(), domain.PasswordResetConfirmInput{
+		Token: "valid-token", NewPassword: "short",
+	})
+	if !errors.Is(err, validate.ErrPasswordTooShort) {
+		t.Errorf("err = %v, want ErrPasswordTooShort", err)
 	}
 }

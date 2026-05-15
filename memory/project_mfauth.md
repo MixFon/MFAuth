@@ -9,7 +9,7 @@ type: project
 
 **Why:** Отдельный модуль авторизации, разворачивается независимо от основного приложения.
 
-**How to apply:** При продолжении работы — начинать с шага 7 (Docker).
+**How to apply:** Все шаги 1-9 реализованы. При продолжении — начинать со следующего запланированного шага (см. раздел "Запланировано").
 
 ## Технологический стек
 - HTTP: `net/http` (Go 1.22+ ServeMux с method routing), НЕТ фреймворков
@@ -21,7 +21,7 @@ type: project
 - Refresh token: 32 байта crypto/rand → hex-строка 64 символа, в БД хранится как есть (не хешируется)
 - Всего внешних зависимостей: 2 (pgx/v5 и golang.org/x/crypto)
 
-## Что реализовано (шаги 1-6) — всё компилируется
+## Что реализовано — всё компилируется, тесты проходят
 
 ### Шаг 1 — Инициализация
 - `go.mod` — модуль `github.com/mixfon/mfauth`
@@ -60,10 +60,22 @@ type: project
 - `cmd/server/main.go` обновлён: db → userRepo + tokenRepo → authService → authHandler
 - Все маршруты зарегистрированы, GET /auth/me обёрнут в middleware.Auth
 
-## Что осталось реализовать
+### Шаг 7 — Docker
+- `docker/Dockerfile` — multi-stage build: golang:1.26-alpine (сборка) → alpine:latest (runtime)
+- `docker/docker-compose.yml` — сервисы: postgres (с healthcheck) + mfauth + nginx
+- `.dockerignore` — исключает .git, .env, *.md из контекста сборки
+- Порт 8080 не торчит наружу — доступен только nginx внутри Docker-сети
 
-- **Шаг 7** — `docker/Dockerfile` (multi-stage build) + `docker/docker-compose.yml`
-- **Шаг 8** — nginx конфиг + TLS (Let's Encrypt)
+### Шаг 8 — nginx + TLS
+- `nginx/nginx.conf` — HTTP→HTTPS редирект, reverse proxy на mfauth:8080, TLS 1.2/1.3
+- Сертификаты Let's Encrypt монтируются с хоста VPS: /etc/letsencrypt
+
+### Шаг 9 — Тесты
+- `pkg/jwt/jwt_test.go` — 5 тестов: валидный токен, истёкший, неверный секрет, malformed, tampered payload
+- `pkg/hash/hash_test.go` — 4 теста: хеш непустой, уникальные соли, верный/неверный пароль
+- `pkg/validate/validate_test.go` — 2 table-driven теста: email и password валидация
+- `internal/service/auth_test.go` — 13 тестов: Register, Login, Refresh, Logout через mock-репозитории
+- Итого 24 теста, все проходят
 
 ## Эндпоинты (реализованы)
 - POST /auth/register — 201 / 400 / 409 / 500
@@ -72,3 +84,21 @@ type: project
 - POST /auth/logout   — 204 / 400 / 401 / 500
 - GET  /auth/me       — 200 (защищён middleware.Auth)
 - GET  /health        — 200 {"status":"ok"}
+
+### Шаг 10 — Восстановление пароля по email
+- `internal/database/migrations/003_create_password_reset_tokens.sql` — таблица password_reset_tokens (TTL 15 мин, одноразовые)
+- `internal/domain/reset_token.go` — PasswordResetToken, PasswordResetRequestInput, PasswordResetConfirmInput
+- `internal/repository/reset_token_postgres.go` — ResetTokenRepository: Save, FindByToken, MarkUsed, DeleteExpired
+- `pkg/email/email.go` — Sender на net/smtp (без зависимостей): STARTTLS (587) и SSL (465)
+- UserRepository расширен методом UpdatePassword
+- AuthService расширен: RequestPasswordReset, ConfirmPasswordReset + интерфейс EmailSender
+- Два новых эндпоинта: POST /auth/password/reset/request и /confirm
+- При подтверждении: смена пароля + RevokeAllForUser (принудительный выход со всех устройств)
+- Конфиг: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM, APP_URL
+- Тестов: 31 (было 24, добавлено 7)
+
+## Запланировано (в порядке реализации)
+
+- **Смена пароля** — `POST /auth/password/change`: принимает текущий пароль + новый, проверяет текущий через bcrypt. UpdatePassword в UserRepository уже реализован — нужны только метод в сервисе и хендлер (защищён middleware.Auth).
+- **Выход со всех устройств** — `POST /auth/logout/all`: отзывает все refresh-токены пользователя. Метод RevokeAllForUser в TokenRepository уже есть — нужен только метод в сервисе и хендлер.
+- **Swagger / OpenAPI** — документация всех эндпоинтов для iOS и Desktop разработчиков. Вероятно через swaggo/swag или ручной spec файл.

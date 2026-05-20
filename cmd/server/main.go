@@ -81,6 +81,8 @@ func main() {
 	// Если токен невалиден — middleware отвечает 401, до хендлера запрос не доходит.
 	authMiddleware := middleware.Auth(cfg.JWT.AccessSecret)
 	mux.Handle("GET /auth/me", authMiddleware(http.HandlerFunc(authHandler.Me)))
+	mux.Handle("POST /auth/logout/all", authMiddleware(http.HandlerFunc(authHandler.LogoutAll)))
+	mux.Handle("POST /auth/password/change", authMiddleware(http.HandlerFunc(authHandler.ChangePassword)))
 
 	// Эндпоинт проверки работоспособности сервиса.
 	// Используется балансировщиком нагрузки и системами мониторинга (uptime-проверки).

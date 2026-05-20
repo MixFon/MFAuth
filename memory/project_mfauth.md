@@ -97,8 +97,21 @@ type: project
 - Конфиг: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM, APP_URL
 - Тестов: 31 (было 24, добавлено 7)
 
+### Шаг 11 — Выход со всех устройств
+- `POST /auth/logout/all` — защищён middleware.Auth, userID берётся из контекста (без тела запроса)
+- Новый метод `LogoutAll(ctx, userID)` в интерфейсе и реализации AuthService — вызывает tokenRepo.RevokeAllForUser
+- Новый хендлер `LogoutAll` в handler/auth.go — возвращает 204 No Content
+- Маршрут зарегистрирован в main.go рядом с GET /auth/me (оба защищены authMiddleware)
+- Тестов: 33 (было 31, добавлено 2: success + repo error)
+
+### Шаг 12 — Смена пароля
+- `POST /auth/password/change` — защищён middleware.Auth, userID из контекста
+- Новая структура `domain.ChangePasswordInput` (current_password + new_password)
+- Новая ошибка `service.ErrInvalidCurrentPassword` (отдельная от ErrInvalidCredentials)
+- Метод `ChangePassword(ctx, userID, input)` в сервисе: FindByID → CheckPassword → validate → hash → UpdatePassword
+- Хендлер: ErrInvalidCurrentPassword → 401, ошибки валидации → 400, успех → 200
+- Тестов: 36 (было 33, добавлено 3: success, wrong current password, weak new password)
+
 ## Запланировано (в порядке реализации)
 
-- **Смена пароля** — `POST /auth/password/change`: принимает текущий пароль + новый, проверяет текущий через bcrypt. UpdatePassword в UserRepository уже реализован — нужны только метод в сервисе и хендлер (защищён middleware.Auth).
-- **Выход со всех устройств** — `POST /auth/logout/all`: отзывает все refresh-токены пользователя. Метод RevokeAllForUser в TokenRepository уже есть — нужен только метод в сервисе и хендлер.
 - **Swagger / OpenAPI** — документация всех эндпоинтов для iOS и Desktop разработчиков. Вероятно через swaggo/swag или ручной spec файл.

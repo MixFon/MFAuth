@@ -29,3 +29,11 @@ type LoginInput struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
+
+// ChangePasswordInput — данные для смены пароля.
+// CurrentPassword нужен чтобы убедиться что запрос делает именно владелец аккаунта,
+// а не кто-то, кто завладел чужим access-токеном.
+type ChangePasswordInput struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}

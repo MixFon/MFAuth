@@ -38,4 +38,9 @@ var (
 	// ErrResetTokenUsed — токен сброса пароля уже был использован.
 	// Каждый токен одноразовый. Хендлер должен вернуть 400 Bad Request.
 	ErrResetTokenUsed = errors.New("reset token already used")
+
+	// ErrInvalidCurrentPassword — текущий пароль при смене пароля не совпадает с хранимым.
+	// Отдельная от ErrInvalidCredentials, чтобы хендлер мог дать точное сообщение.
+	// Хендлер должен вернуть 401 Unauthorized.
+	ErrInvalidCurrentPassword = errors.New("current password is incorrect")
 )

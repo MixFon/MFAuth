@@ -30,6 +30,8 @@ type AuthService interface {
 	Login(ctx context.Context, input domain.LoginInput) (domain.TokenPair, error)
 	Refresh(ctx context.Context, input domain.RefreshInput) (domain.TokenPair, error)
 	Logout(ctx context.Context, refreshToken string) error
+	LogoutAll(ctx context.Context, userID int64) error
+	ChangePassword(ctx context.Context, userID int64, input domain.ChangePasswordInput) error
 	RequestPasswordReset(ctx context.Context, email string) error
 	ConfirmPasswordReset(ctx context.Context, input domain.PasswordResetConfirmInput) error
 }
@@ -181,6 +183,47 @@ func (s *authService) Logout(ctx context.Context, refreshToken string) error {
 	}
 
 	s.log.Info("user logged out", "user_id", stored.UserID)
+	return nil
+}
+
+// LogoutAll отзывает все refresh-токены пользователя — принудительный выход со всех устройств.
+// Используется когда пользователь хочет завершить все активные сессии сразу.
+func (s *authService) LogoutAll(ctx context.Context, userID int64) error {
+	if err := s.tokenRepo.RevokeAllForUser(ctx, userID); err != nil {
+		return err
+	}
+
+	s.log.Info("user logged out from all devices", "user_id", userID)
+	return nil
+}
+
+// ChangePassword проверяет текущий пароль и устанавливает новый.
+// Порядок: поиск пользователя → проверка текущего пароля → валидация нового → хеширование → сохранение.
+func (s *authService) ChangePassword(ctx context.Context, userID int64, input domain.ChangePasswordInput) error {
+	user, err := s.userRepo.FindByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	// Проверяем текущий пароль — убеждаемся что запрос делает именно владелец аккаунта.
+	if !hash.CheckPassword(input.CurrentPassword, user.PasswordHash) {
+		return ErrInvalidCurrentPassword
+	}
+
+	if err = validate.Password(input.NewPassword); err != nil {
+		return err
+	}
+
+	passwordHash, err := hash.Password(input.NewPassword)
+	if err != nil {
+		return err
+	}
+
+	if err = s.userRepo.UpdatePassword(ctx, userID, passwordHash); err != nil {
+		return err
+	}
+
+	s.log.Info("password changed", "user_id", userID)
 	return nil
 }
 

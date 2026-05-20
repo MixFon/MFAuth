@@ -390,6 +390,99 @@ func TestLogout_TokenNotFound(t *testing.T) {
 }
 
 // =============================================================================
+// ChangePassword
+// =============================================================================
+
+func TestChangePassword_Success(t *testing.T) {
+	userRepo := &mockUserRepo{
+		findByIDFn: func(_ context.Context, _ int64) (*domain.User, error) {
+			return &domain.User{ID: 1, Email: "test@example.com", PasswordHash: testPasswordHash}, nil
+		},
+	}
+	svc := newTestService(userRepo, &mockTokenRepo{})
+
+	err := svc.ChangePassword(context.Background(), 1, domain.ChangePasswordInput{
+		CurrentPassword: "password123",
+		NewPassword:     "newpassword456",
+	})
+	if err != nil {
+		t.Errorf("ChangePassword: %v", err)
+	}
+}
+
+func TestChangePassword_WrongCurrentPassword(t *testing.T) {
+	userRepo := &mockUserRepo{
+		findByIDFn: func(_ context.Context, _ int64) (*domain.User, error) {
+			return &domain.User{ID: 1, PasswordHash: testPasswordHash}, nil
+		},
+	}
+	svc := newTestService(userRepo, &mockTokenRepo{})
+
+	err := svc.ChangePassword(context.Background(), 1, domain.ChangePasswordInput{
+		CurrentPassword: "wrongpassword",
+		NewPassword:     "newpassword456",
+	})
+	if !errors.Is(err, service.ErrInvalidCurrentPassword) {
+		t.Errorf("err = %v, want ErrInvalidCurrentPassword", err)
+	}
+}
+
+func TestChangePassword_WeakNewPassword(t *testing.T) {
+	userRepo := &mockUserRepo{
+		findByIDFn: func(_ context.Context, _ int64) (*domain.User, error) {
+			return &domain.User{ID: 1, PasswordHash: testPasswordHash}, nil
+		},
+	}
+	svc := newTestService(userRepo, &mockTokenRepo{})
+
+	err := svc.ChangePassword(context.Background(), 1, domain.ChangePasswordInput{
+		CurrentPassword: "password123",
+		NewPassword:     "short",
+	})
+	if !errors.Is(err, validate.ErrPasswordTooShort) {
+		t.Errorf("err = %v, want ErrPasswordTooShort", err)
+	}
+}
+
+// =============================================================================
+// LogoutAll
+// =============================================================================
+
+func TestLogoutAll_Success(t *testing.T) {
+	var revokedUserID int64
+	tokenRepo := &mockTokenRepo{
+		revokeAllForUserFn: func(_ context.Context, userID int64) error {
+			revokedUserID = userID
+			return nil
+		},
+	}
+	svc := newTestService(&mockUserRepo{}, tokenRepo)
+
+	err := svc.LogoutAll(context.Background(), 42)
+	if err != nil {
+		t.Errorf("LogoutAll: %v", err)
+	}
+	if revokedUserID != 42 {
+		t.Errorf("revokeAllForUser called with userID=%d, want 42", revokedUserID)
+	}
+}
+
+func TestLogoutAll_RepoError(t *testing.T) {
+	repoErr := errors.New("db error")
+	tokenRepo := &mockTokenRepo{
+		revokeAllForUserFn: func(_ context.Context, _ int64) error {
+			return repoErr
+		},
+	}
+	svc := newTestService(&mockUserRepo{}, tokenRepo)
+
+	err := svc.LogoutAll(context.Background(), 1)
+	if !errors.Is(err, repoErr) {
+		t.Errorf("err = %v, want %v", err, repoErr)
+	}
+}
+
+// =============================================================================
 // RequestPasswordReset
 // =============================================================================
 

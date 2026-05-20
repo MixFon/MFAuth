@@ -129,6 +129,59 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ChangePassword обрабатывает POST /auth/password/change.
+// Защищён middleware.Auth — userID берётся из контекста.
+// Тело запроса: current_password и new_password.
+func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, errorResponse("unauthorized"))
+		return
+	}
+
+	var input domain.ChangePasswordInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body"))
+		return
+	}
+
+	err := h.service.ChangePassword(r.Context(), userID, input)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidCurrentPassword):
+			writeJSON(w, http.StatusUnauthorized, errorResponse(err.Error()))
+		case errors.Is(err, validate.ErrPasswordTooShort),
+			errors.Is(err, validate.ErrPasswordTooLong):
+			writeJSON(w, http.StatusBadRequest, errorResponse(err.Error()))
+		default:
+			h.log.Error("change password failed", "err", err)
+			writeJSON(w, http.StatusInternalServerError, errorResponse("internal server error"))
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "password changed successfully"})
+}
+
+// LogoutAll обрабатывает POST /auth/logout/all.
+// Защищён middleware.Auth — userID берётся из контекста, тело запроса не нужно.
+// Отзывает все refresh-токены пользователя. Возвращает 204 без тела ответа.
+func (h *AuthHandler) LogoutAll(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, errorResponse("unauthorized"))
+		return
+	}
+
+	if err := h.service.LogoutAll(r.Context(), userID); err != nil {
+		h.log.Error("logout all failed", "err", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse("internal server error"))
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // RequestPasswordReset обрабатывает POST /auth/password/reset/request.
 // Всегда возвращает 200 — даже если email не зарегистрирован, чтобы не раскрывать список аккаунтов.
 func (h *AuthHandler) RequestPasswordReset(w http.ResponseWriter, r *http.Request) {

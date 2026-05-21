@@ -115,3 +115,48 @@ type: project
 ## Запланировано (в порядке реализации)
 
 - **Swagger / OpenAPI** — документация всех эндпоинтов для iOS и Desktop разработчиков. Вероятно через swaggo/swag или ручной spec файл.
+
+### Социальная авторизация (Google + Yandex)
+
+Приложения ещё в разработке — архитектура заложена заранее.
+
+**Схема:** мобильное/десктопное приложение использует SDK провайдера, получает `id_token`, отправляет его на сервер. Сервер верифицирует подпись, читает `sub`+`email`, находит или создаёт пользователя, возвращает наш `TokenPair`.
+
+**Новые эндпоинты (публичные, без middleware.Auth):**
+- `POST /auth/social/google` — тело: `{"id_token": "..."}`
+- `POST /auth/social/yandex` — тело: `{"id_token": "..."}`
+
+**Новые переменные окружения:**
+- `GOOGLE_CLIENT_ID` — из Google Cloud Console (APIs & Services → Credentials → OAuth 2.0 Client ID)
+- `YANDEX_CLIENT_ID` — из oauth.yandex.ru (создать приложение, доступы: login:email, login:info)
+
+**Логика поиска/создания пользователя:**
+1. Ищем в `social_accounts` по (provider, provider_id=sub)
+2. Нашли → загружаем пользователя
+3. Не нашли → ищем по email: нашли → привязываем соцсеть к существующему аккаунту
+4. Email новый → создаём пользователя с пустым PasswordHash + запись в social_accounts
+
+**Пользователи без пароля:** не могут войти через `/auth/login`, но могут установить пароль через `/auth/password/reset/request`.
+
+**Порядок реализации (5 шагов):**
+
+1. `migrations/004_create_social_accounts.sql` + `internal/domain/social.go`
+   - Таблица: `id`, `user_id` (FK → users), `provider`, `provider_id`, `created_at`, UNIQUE(provider, provider_id)
+   - Структуры: `SocialAccount`, `SocialLoginInput{IDToken string}`
+
+2. `pkg/jwks/jwks.go` + тесты — самая сложная часть
+   - JWKS-клиент: загружает публичные RSA-ключи провайдера по URL
+   - Кеш с TTL 1 час (sync.RWMutex) — не ходим к провайдеру на каждый запрос
+   - `Verify(token, issuer, audience)` — проверяет подпись (RS256) + exp + iss + aud
+   - Google JWKS URL: `https://www.googleapis.com/oauth2/v3/certs`
+   - Yandex JWKS URL: `https://login.yandex.ru/info` (уточнить актуальный endpoint)
+   - Только стандартная библиотека: `crypto/rsa`, `crypto/x509`, `encoding/base64`
+
+3. `internal/repository/repository.go` + `social_postgres.go`
+   - Интерфейс `SocialRepository`: `FindByProvider(ctx, provider, providerID)`, `Create(ctx, account)`
+
+4. `internal/config/config.go` — добавить `GoogleClientID`, `YandexClientID`
+
+5. `internal/service/auth.go` + `handler/auth.go` + `cmd/server/main.go`
+   - Методы сервиса: `LoginWithGoogle(ctx, idToken)`, `LoginWithYandex(ctx, idToken)`
+   - Хендлеры + регистрация маршрутов + wire-up socialRepo в main.go

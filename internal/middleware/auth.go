@@ -6,6 +6,7 @@ package middleware
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -22,13 +23,15 @@ const (
 	contextKeyUserID contextKey = iota
 	// contextKeyUserEmail — ключ для хранения email пользователя в контексте запроса.
 	contextKeyUserEmail
+	// contextKeyRequestID — ключ для уникального ID запроса, сквозного через все логи.
+	contextKeyRequestID
 )
 
 // Auth возвращает middleware, которое проверяет JWT в заголовке Authorization.
 // secret — тот же секрет, которым подписывались access-токены (cfg.JWT.AccessSecret).
 // Если токен валиден — кладёт userID и email в контекст и передаёт запрос дальше.
 // Если невалиден или отсутствует — немедленно отвечает 401 и прерывает цепочку.
-func Auth(secret string) func(http.Handler) http.Handler {
+func Auth(secret string, log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Заголовок должен выглядеть как: Authorization: Bearer <token>
@@ -50,9 +53,17 @@ func Auth(secret string) func(http.Handler) http.Handler {
 				// Различаем истёкший токен от невалидного — клиент может
 				// обработать их по-разному: на expired сделать refresh, на invalid — выйти.
 				if err == jwt.ErrExpiredToken {
+					log.Warn("expired token",
+						"request_id", RequestIDFromContext(r.Context()),
+						"ip", ClientIP(r),
+					)
 					writeUnauthorized(w, "token expired")
 					return
 				}
+				log.Warn("invalid token",
+					"request_id", RequestIDFromContext(r.Context()),
+					"ip", ClientIP(r),
+				)
 				writeUnauthorized(w, "invalid token")
 				return
 			}
@@ -78,6 +89,13 @@ func UserIDFromContext(ctx context.Context) (int64, bool) {
 func UserEmailFromContext(ctx context.Context) (string, bool) {
 	email, ok := ctx.Value(contextKeyUserEmail).(string)
 	return email, ok
+}
+
+// RequestIDFromContext возвращает Request ID из контекста запроса.
+// Возвращает пустую строку если middleware RequestID не был применён.
+func RequestIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(contextKeyRequestID).(string)
+	return id
 }
 
 // writeUnauthorized пишет JSON-ответ с кодом 401 и текстом ошибки.

@@ -17,6 +17,7 @@ type Config struct {
 	Database DatabaseConfig
 	JWT      JWTConfig
 	Email    EmailConfig
+	LogLevel string // debug | info | warn | error
 }
 
 // ServerConfig содержит параметры HTTP-сервера.
@@ -62,6 +63,7 @@ type EmailConfig struct {
 // локальную разработку без обязательного .env файла.
 func Load() *Config {
 	return &Config{
+		LogLevel: getEnv("LOG_LEVEL", "info"),
 		Server: ServerConfig{
 			Port:         getEnv("SERVER_PORT", "8080"),
 			ReadTimeout:  getDurationEnv("SERVER_READ_TIMEOUT_SEC", 10) * time.Second,

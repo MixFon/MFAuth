@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,13 +23,25 @@ import (
 )
 
 func main() {
-	// slog — стандартный структурированный логгер Go (появился в 1.21).
-	// JSON-формат удобен для сбора логов на VPS через logrotate или внешние системы (Loki, Datadog).
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-
 	// Загружаем конфигурацию из переменных окружения.
 	// В продакшене переменные задаются через .env файл или секреты Docker/systemd.
 	cfg := config.Load()
+
+	// Настраиваем уровень логирования из конфига (LOG_LEVEL=debug|info|warn|error).
+	// slog — стандартный структурированный логгер Go (появился в 1.21).
+	// JSON-формат удобен для сбора логов на VPS через logrotate или внешние системы (Loki, Datadog).
+	var logLevel slog.Level
+	switch strings.ToLower(cfg.LogLevel) {
+	case "debug":
+		logLevel = slog.LevelDebug
+	case "warn":
+		logLevel = slog.LevelWarn
+	case "error":
+		logLevel = slog.LevelError
+	default:
+		logLevel = slog.LevelInfo
+	}
+	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 
 	// Подключаемся к PostgreSQL.
 	db, err := database.New(cfg.Database.DSN)
@@ -79,7 +92,7 @@ func main() {
 	// Защищённый маршрут — оборачиваем в middleware.Auth.
 	// middleware.Auth проверяет JWT и кладёт userID в контекст.
 	// Если токен невалиден — middleware отвечает 401, до хендлера запрос не доходит.
-	authMiddleware := middleware.Auth(cfg.JWT.AccessSecret)
+	authMiddleware := middleware.Auth(cfg.JWT.AccessSecret, log)
 	mux.Handle("GET /auth/me", authMiddleware(http.HandlerFunc(authHandler.Me)))
 	mux.Handle("POST /auth/logout/all", authMiddleware(http.HandlerFunc(authHandler.LogoutAll)))
 	mux.Handle("POST /auth/password/change", authMiddleware(http.HandlerFunc(authHandler.ChangePassword)))
@@ -91,9 +104,16 @@ func main() {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	// Оборачиваем mux в цепочку глобальных middleware (применяются к каждому запросу):
+	// RequestID → Logger → mux
+	// RequestID должен быть снаружи, чтобы Logger уже видел ID в контексте.
+	var handler http.Handler = mux
+	handler = middleware.Logger(log)(handler)
+	handler = middleware.RequestID(handler)
+
 	srv := &http.Server{
 		Addr:    ":" + cfg.Server.Port,
-		Handler: mux,
+		Handler: handler,
 		// Таймауты защищают от slowloris-атак и зависших соединений.
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,

@@ -68,6 +68,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrInvalidCredentials):
+			h.log.Warn("failed login attempt",
+				"request_id", middleware.RequestIDFromContext(r.Context()),
+				"ip", middleware.ClientIP(r),
+				"email", input.Email,
+			)
 			writeJSON(w, http.StatusUnauthorized, errorResponse("invalid email or password"))
 		default:
 			h.log.Error("login failed", "err", err)
